@@ -1,5 +1,5 @@
 from glob import glob
-
+import segmentation_models as sm
 import IPython.display as display
 import matplotlib.pyplot as plt
 import numpy as np
@@ -176,9 +176,6 @@ dataset['train'] = dataset['train'].batch(BATCH_SIZE)
 dataset['train'] = dataset['train'].prefetch(buffer_size=AUTOTUNE)
 
 
-num_elements = 0
-
-print(num_elements)
 #-- Validation Dataset --#
 dataset['val'] = dataset['val'].map(load_image_test)
 dataset['val'] = dataset['val'].repeat()
@@ -218,70 +215,23 @@ input_size = (IMG_SIZE, IMG_SIZE, N_CHANNELS)
 # https://stats.stackexchange.com/questions/319323/whats-the-difference-between-variance-scaling-initializer-and-xavier-initialize/319849#319849
 # Or the excellent fastai course:
 # https://github.com/fastai/course-v3/blob/master/nbs/dl2/02b_initializing.ipynb
-initializer = 'he_normal'
 
+base_model = tf.keras.applications.MobileNetV2(input_shape=[128, 128, 3], include_top=False)
 
-# -- Encoder -- #
-# Block encoder 1
-inputs = Input(shape=input_size)
-conv_enc_1 = Conv2D(64, 3, activation='relu', padding='same', kernel_initializer=initializer)(inputs)
-conv_enc_1 = Conv2D(64, 3, activation = 'relu', padding='same', kernel_initializer=initializer)(conv_enc_1)
+# Use the activations of these layers
+layer_names = [
+    'block_1_expand_relu',   # 64x64
+    'block_3_expand_relu',   # 32x32
+    'block_6_expand_relu',   # 16x16
+    'block_13_expand_relu',  # 8x8
+    'block_16_project',      # 4x4
+]
+base_model_outputs = [base_model.get_layer(name).output for name in layer_names]
 
-# Block encoder 2
-max_pool_enc_2 = MaxPooling2D(pool_size=(2, 2))(conv_enc_1)
-conv_enc_2 = Conv2D(128, 3, activation = 'relu', padding = 'same', kernel_initializer = initializer)(max_pool_enc_2)
-conv_enc_2 = Conv2D(128, 3, activation = 'relu', padding = 'same', kernel_initializer = initializer)(conv_enc_2)
+# Create the feature extraction model
+down_stack = tf.keras.Model(inputs=base_model.input, outputs=base_model_outputs)
 
-# Block  encoder 3
-max_pool_enc_3 = MaxPooling2D(pool_size=(2, 2))(conv_enc_2)
-conv_enc_3 = Conv2D(256, 3, activation = 'relu', padding = 'same', kernel_initializer = initializer)(max_pool_enc_3)
-conv_enc_3 = Conv2D(256, 3, activation = 'relu', padding = 'same', kernel_initializer = initializer)(conv_enc_3)
-
-# Block  encoder 4
-max_pool_enc_4 = MaxPooling2D(pool_size=(2, 2))(conv_enc_3)
-conv_enc_4 = Conv2D(512, 3, activation = 'relu', padding = 'same', kernel_initializer = initializer)(max_pool_enc_4)
-conv_enc_4 = Conv2D(512, 3, activation = 'relu', padding = 'same', kernel_initializer = initializer)(conv_enc_4)
-# -- Encoder -- #
-
-# ----------- #
-maxpool = MaxPooling2D(pool_size=(2, 2))(conv_enc_4)
-conv = Conv2D(1024, 3, activation = 'relu', padding = 'same', kernel_initializer = initializer)(maxpool)
-conv = Conv2D(1024, 3, activation = 'relu', padding = 'same', kernel_initializer = initializer)(conv)
-# ----------- #
-
-# -- Decoder -- #
-# Block decoder 1
-up_dec_1 = Conv2D(512, 2, activation = 'relu', padding = 'same', kernel_initializer = initializer)(UpSampling2D(size = (2,2))(conv))
-merge_dec_1 = concatenate([conv_enc_4, up_dec_1], axis = 3)
-conv_dec_1 = Conv2D(512, 3, activation = 'relu', padding = 'same', kernel_initializer = initializer)(merge_dec_1)
-conv_dec_1 = Conv2D(512, 3, activation = 'relu', padding = 'same', kernel_initializer = initializer)(conv_dec_1)
-
-# Block decoder 2
-up_dec_2 = Conv2D(256, 2, activation = 'relu', padding = 'same', kernel_initializer = initializer)(UpSampling2D(size = (2,2))(conv_dec_1))
-merge_dec_2 = concatenate([conv_enc_3, up_dec_2], axis = 3)
-conv_dec_2 = Conv2D(256, 3, activation = 'relu', padding = 'same', kernel_initializer = initializer)(merge_dec_2)
-conv_dec_2 = Conv2D(256, 3, activation = 'relu', padding = 'same', kernel_initializer = initializer)(conv_dec_2)
-
-# Block decoder 3
-up_dec_3 = Conv2D(128, 2, activation = 'relu', padding = 'same', kernel_initializer = initializer)(UpSampling2D(size = (2,2))(conv_dec_2))
-merge_dec_3 = concatenate([conv_enc_2, up_dec_3], axis = 3)
-conv_dec_3 = Conv2D(128, 3, activation = 'relu', padding = 'same', kernel_initializer = initializer)(merge_dec_3)
-conv_dec_3 = Conv2D(128, 3, activation = 'relu', padding = 'same', kernel_initializer = initializer)(conv_dec_3)
-
-# Block decoder 4
-up_dec_4 = Conv2D(64, 2, activation = 'relu', padding = 'same', kernel_initializer = initializer)(UpSampling2D(size = (2,2))(conv_dec_3))
-merge_dec_4 = concatenate([conv_enc_1, up_dec_4], axis = 3)
-conv_dec_4 = Conv2D(64, 3, activation = 'relu', padding = 'same', kernel_initializer = initializer)(merge_dec_4)
-conv_dec_4 = Conv2D(64, 3, activation = 'relu', padding = 'same', kernel_initializer = initializer)(conv_dec_4)
-conv_dec_4 = Conv2D(2, 3, activation = 'relu', padding = 'same', kernel_initializer = initializer)(conv_dec_4)
-# -- Dencoder -- #
-
-output = Conv2D(N_CLASSES, 1, activation = 'softmax')(conv_dec_4)
-
-
-model = tf.keras.Model(inputs = inputs, outputs = output)
-model.compile(optimizer=Adam(learning_rate=0.01), loss = tf.keras.losses.SparseCategoricalCrossentropy(),
-              metrics=['accuracy'])
+down_stack.trainable = False
 
 def create_mask(pred_mask: tf.Tensor) -> tf.Tensor:
     """Return a filter mask with the top 1 predictions
@@ -342,13 +292,22 @@ def show_predictions(dataset=None, num=1):
 for image, mask in dataset['train'].take(1):
     sample_image, sample_mask = image, mask
 
-show_predictions()
+#show_predictions()
 
 EPOCHS = 10
 
 STEPS_PER_EPOCH = TRAINSET_SIZE // BATCH_SIZE
 VALIDATION_STEPS = VALSET_SIZE // BATCH_SIZE
+model = sm.Unet('resnet34', input_shape=[128, 128, 3], encoder_weights=None)
+model.compile('Adam',loss=sm.losses.bce_jaccard_loss,metrics=[sm.metrics.iou_score],)
 
+"""
+model = tf.keras.applications.mobilenet_v2.MobileNetV2(
+    input_shape=[128, 128, 3], alpha=1.0, include_top=True, weights='imagenet',
+    input_tensor=None, pooling=None, classes=2,
+    classifier_activation='softmax'
+)
+"""
 model_history = model.fit(dataset['train'], epochs=EPOCHS,
                           steps_per_epoch=STEPS_PER_EPOCH,
                           validation_steps=VALIDATION_STEPS,
