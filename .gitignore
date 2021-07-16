@@ -1,2 +1,5 @@
 # Project exclude paths
 /venv/
+/anotation/
+/images/
+/test_frames/
